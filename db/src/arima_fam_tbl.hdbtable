@@ -1,0 +1,9 @@
+column table "ARIMA_FAM_TBL" (
+    "PLANT" NVARCHAR(10) COMMENT 'plant',
+    "PARTNER"  NVARCHAR(10) COMMENT 'partner',
+    "MATERIAL"  NVARCHAR(10) COMMENT 'material',
+    "SIGN" NVARCHAR(1) COMMENT 'sign',
+    "STAT_NAME" NVARCHAR(100) COMMENT 'stat_name',
+    "STAT_VALUE" DOUBLE COMMENT 'stat_value'
+)
+COMMENT 'arima fam table'

@@ -1,0 +1,10 @@
+column table "ARIMA_RESULT_TBL" (
+    "PLANT" NVARCHAR(10) COMMENT 'plant',
+    "PARTNER"  NVARCHAR(10) COMMENT 'partner',
+    "MATERIAL"  NVARCHAR(10) COMMENT 'material',
+    "SIGN" NVARCHAR(1) COMMENT 'sign',
+    "DATE" DATE COMMENT 'date',
+    "ACTUAL_VALUE" DOUBLE COMMENT 'actual value',
+    "PREDICTED_VALUE" DOUBLE COMMENT 'predicted value'
+)
+COMMENT 'arima result table'

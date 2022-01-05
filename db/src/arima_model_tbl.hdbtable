@@ -1,0 +1,8 @@
+column table "ARIMA_MODEL_TBL" (
+    "PLANT" NVARCHAR(10) COMMENT 'plant',
+    "PARTNER"  NVARCHAR(10) COMMENT 'partner',
+    "MATERIAL"  NVARCHAR(10) COMMENT 'material',
+    "KEY" NCLOB COMMENT 'key',
+    "VALUE" NCLOB COMMENT 'value'
+)
+COMMENT 'arima model table'

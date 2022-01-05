@@ -1,0 +1,8 @@
+column table "RPM_DATA_TBL" (
+    "DATE" DATE not null COMMENT 'Date',
+    "PLANT" NVARCHAR(10) COMMENT 'plant',
+    "PARTNER"  NVARCHAR(10) COMMENT 'partner',
+    "MATERIAL"  NVARCHAR(10) COMMENT 'material',
+    "VALUE" DOUBLE COMMENT 'value'
+)
+COMMENT 'rpm input data'
