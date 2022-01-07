@@ -1,0 +1,149 @@
+PROCEDURE "autoarima"( )
+   LANGUAGE SQLSCRIPT
+   SQL SECURITY INVOKER
+   --DEFAULT SCHEMA <default_schema_name>
+   AS
+BEGIN
+
+  DECLARE curr_filter   INTEGER DEFAULT 1;
+  DECLARE curr_plant    NVARCHAR(4);
+  DECLARE curr_partner  NVARCHAR(10);
+  DECLARE curr_material NVARCHAR(10);
+  DECLARE curr_sign     NVARCHAR(1);
+  DECLARE train_size    INTEGER;
+  DECLARE test_size     INTEGER;
+  DECLARE curr_index    INTEGER;
+  DECLARE curr_time     INTEGER;
+  DECLARE test_index    INTEGER;
+  DECLARE tv_train_data TABLE("TIME_STAMP" INTEGER, "VALUE" DOUBLE);
+  DECLARE tv_date       TABLE("DATE" DATE);
+  DECLARE tv_param      TABLE("NAME" NVARCHAR(50), "INT_VALUE" INTEGER, "DOUBLE_VALUE" DOUBLE, "STRING_VALUE" NVARCHAR(100));
+  DECLARE tv_model      TABLE("KEY"  NCLOB, "VALUE" NCLOB);
+  DECLARE tv_fit        TABLE("TIME_STAMP"  INTEGER, "FITTED" DOUBLE, "RESIDUALS" DOUBLE);
+  DECLARE tv_test_data  TABLE("TIME_STAMP" INTEGER, "VALUE" DOUBLE);
+  DECLARE tv_forecasts  TABLE("DATE" DATE, "FORECAST" DOUBLE);
+  DECLARE curr_value    DOUBLE;
+  DECLARE tv_test_param TABLE("NAME" NVARCHAR(50), "INT_VALUE" INTEGER, "DOUBLE_VALUE" DOUBLE, "STRING_VALUE" NVARCHAR(100));
+  DECLARE tv_fam_param  TABLE("NAME" NVARCHAR(50), "INT_VALUE" INTEGER, "DOUBLE_VALUE" DOUBLE, "STRING_VALUE" NVARCHAR(100));
+  -- Clear modle content and result table
+  DELETE FROM ARIMA_MODEL_TBL;
+  DELETE FROM ARIMA_RESULT_TBL;
+  DELETE FROM ARIMA_FAM_TBL;
+  -- Prepare filters
+  -- Categorize inbound and outbound values
+  tv_data_sign = SELECT "DATE", "PLANT", "PARTNER", "MATERIAL", "VALUE",
+                        CASE WHEN "VALUE" >= 0 THEN 'P'
+                                               ELSE 'N' END AS "SIGN" FROM RPM_DATA_TBL;
+  -- Aggregate transactions by date
+  tv_data_aggr_by_date = SELECT "DATE", "PLANT", "PARTNER", "MATERIAL", "SIGN", COUNT(*) AS "TRANSACTION_COUNT" FROM :tv_data_sign
+                       GROUP BY "PLANT", "PARTNER", "MATERIAL", "DATE", "SIGN"
+                       ORDER BY "PLANT", "PARTNER", "MATERIAL", "DATE", "SIGN";
+  -- Further aggreegate transactions by filters (plant, partner, material)
+  tv_data_aggr_by_filter = SELECT "PLANT", "PARTNER", "MATERIAL", "SIGN", COUNT(*) AS "DATE_COUNT" FROM :tv_data_aggr_by_date
+                         GROUP BY "PLANT", "PARTNER", "MATERIAL", "SIGN"
+                         ORDER BY "PLANT", "PARTNER", "MATERIAL", "SIGN";
+
+  -- Data selection for time series longer enough
+  tv_filter = SELECT "PLANT", "PARTNER", "MATERIAL", "SIGN" FROM :tv_data_aggr_by_filter WHERE "DATE_COUNT" > 20;  -- *** Transactions distributed into more than 20 dates ***
+  
+  -- Loop at each combination of filters
+  WHILE :curr_filter <= RECORD_COUNT(:tv_filter) DO
+    curr_plant    = :tv_filter."PLANT"[:curr_filter];
+    curr_partner  = :tv_filter."PARTNER"[:curr_filter];
+    curr_material = :tv_filter."MATERIAL"[:curr_filter];
+    curr_sign     = :tv_filter."SIGN"[:curr_filter];
+    -- Data
+    tv_data = SELECT "DATE", SUM("VALUE") AS VALUE
+                FROM :tv_data_sign
+               WHERE "PLANT"    = :curr_plant
+                 AND "PARTNER"  = :curr_partner
+                 AND "MATERIAL" = :curr_material
+                 AND "SIGN"     = :curr_sign
+            GROUP BY "DATE"
+            ORDER BY "DATE";
+    -- Splitting into training and testing data
+    test_size = 0.2 * RECORD_COUNT(:tv_data);  -- *** Using the rest 20% for validation ***
+    train_size = RECORD_COUNT(:tv_data) - :test_size;
+    curr_index = 1;
+    tv_train_data = SELECT TO_INTEGER(NULL) AS "TIME_STAMP", TO_DOUBLE(NULL) AS "VALUE" FROM DUMMY; -- Clear training data container
+    tv_date       = SELECT TO_DATE(NULL) AS "DATE" FROM DUMMY; -- Clear training data container
+    WHILE :curr_index <= :train_size DO
+      tv_train_data."TIME_STAMP"[:curr_index]  = :curr_index;
+      tv_train_data."VALUE"[:curr_index]       = :tv_data."VALUE"[:curr_index];
+      curr_index = :curr_index + 1;
+    END WHILE;
+    curr_index = 1;
+    WHILE :curr_index <= :test_size DO
+	  tv_date."DATE"[:curr_index]              = :tv_data."DATE"[:train_size + :curr_index];
+      curr_index = :curr_index + 1;
+    END WHILE;
+    -- Training parameter
+    tv_param."NAME"[1]         = 'THREAD_RATIO';
+    tv_param."DOUBLE_VALUE"[1] = 1.0;
+    tv_param."NAME"[2]         = 'MAX_P';
+    tv_param."INT_VALUE"[2]    = 5;
+    tv_param."NAME"[3]         = 'MAX_D';
+    tv_param."INT_VALUE"[3]    = 3;
+    tv_param."NAME"[4]         = 'MAX_Q';
+    tv_param."INT_VALUE"[4]    = 5;
+    tv_param."NAME"[5]         = 'MAX_SEASONAL_P';
+    tv_param."INT_VALUE"[5]    = 5;
+    tv_param."NAME"[6]         = 'MAX_SEASONAL_D';
+    tv_param."INT_VALUE"[6]    = 3;
+    tv_param."NAME"[7]         = 'MAX_SEASONAL_Q';
+    tv_param."INT_VALUE"[7]    = 5;
+    tv_param."NAME"[8]         = 'MAX_ORDER';
+    tv_param."INT_VALUE"[8]    = 20;
+    tv_param."NAME"[9]         = 'SEASONAL_PERIOD';
+    tv_param."INT_VALUE"[9]    = -1;
+    -- Clear model container
+    tv_model = SELECT TO_NCLOB(NULL) AS "KEY", TO_NCLOB(NULL) AS "VALUE" FROM DUMMY;
+    -- Clear fit container
+    tv_fit   = SELECT TO_INTEGER(NULL) AS "TIME_STAMP", TO_DOUBLE(NULL) AS "FITTED", TO_DOUBLE(NULL) AS "RESIDUALS" FROM DUMMY;
+    -- Call PAL AutoARIMA
+    CALL PAL_AUTOARIMA(:tv_train_data, :tv_param, tv_model, tv_fit);
+    -- -- Write single result
+    INSERT INTO ARIMA_MODEL_TBL SELECT :curr_plant AS "PLANT", :curr_partner AS "PARTNER", :curr_material AS "MATERIAL", "KEY", "VALUE" FROM :tv_model;
+
+
+
+
+    -- Predicting parameter
+    tv_test_param."NAME"[1]      = 'FORECAST_LENGTH';
+    tv_test_param."INT_VALUE"[1] = :test_size;
+    -- Call PAL Additive Model Time Series Analysis Prediction
+    CALL PAL_ARIMA_FORECAST(:tv_test_data, :tv_model, :tv_test_param, tv_result);
+    -- Create a new forecast result table for inner join
+    tv_forecasts = SELECT TO_DATE(NULL) AS "DATE", TO_DOUBLE(NULL) AS "FORECAST" FROM DUMMY;
+    curr_index = 1;
+    WHILE :curr_index <= RECORD_COUNT(:tv_result) DO
+      tv_forecasts."DATE"[:curr_index]  = :tv_date."DATE"[:curr_index];
+      tv_forecasts."FORECAST"[:curr_index] = :tv_result."FORECAST"[:curr_index];
+      curr_index = :curr_index + 1;
+    END WHILE;
+    
+  
+    tv_result_with_ground_truth =
+      SELECT :curr_plant AS "PLANT", :curr_partner AS "PARTNER", :curr_material AS "MATERIAL", :curr_sign AS "SIGN",
+             r."DATE", d."VALUE" AS "ACTUAL_VALUE", "FORECAST" AS "PREDICTED_VALUE"
+        FROM :tv_forecasts AS r INNER JOIN :tv_data AS d ON r."DATE" = d."DATE";
+    INSERT INTO ARIMA_RESULT_TBL SELECT * FROM :tv_result_with_ground_truth;
+
+
+    -- Forecast Accuracy Measurement (Using RMSE in this example, more on https://help.sap.com/viewer/319d36de4fd64ac3afbf91b1fb3ce8de/2021_4_QRC/en-US/568723fd2f9e42269b61e993e09ba019.html)
+    tv_fam_data =
+      SELECT "ACTUAL_VALUE", "PREDICTED_VALUE" FROM :tv_result_with_ground_truth;
+    tv_fam_param."NAME"[1]         = 'MEASURE_NAME';
+    tv_fam_param."STRING_VALUE"[1] = 'RMSE';
+    CALL PAL_ACCURACY_MEASURES(:tv_fam_data, :tv_fam_param, tv_fam_result);
+    INSERT INTO ARIMA_FAM_TBL
+      SELECT :curr_plant AS "PLANT", :curr_partner AS "PARTNER", :curr_material AS "MATERIAL", :curr_sign AS "SIGN",
+             "STAT_NAME" AS "STAT_NAME", "STAT_VALUE" AS "STAT_VALUE"
+        FROM :tv_fam_result;
+ 
+    
+    curr_filter = :curr_filter + 1;
+ 
+	END WHILE;
+
+END

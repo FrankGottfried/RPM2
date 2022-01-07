@@ -16,5 +16,11 @@
       "object": "PAL_ACCURACY_MEASURES",
       "schema": "_SYS_AFL"
     }
+  },
+  "DUMMY": {
+    "target": {
+      "object": "DUMMY",
+      "schema": "SYS"
+    }
   }
 }
